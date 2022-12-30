@@ -256,3 +256,53 @@ bool Utility::isJsonNumber(_In_ PWSTR str)
     wregex isNumber(L"(^\\-?\\d+$)|(^\\-?\\d+\\.\\d+)$");
     return regex_search(str, isNumber);
 }
+
+///
+/// helper function to "sanitize" a string to be valid JSON
+/// i.e. escale \", \n and \\ within a string
+///
+static std::wstring JsonSanitize(_In_ std::wstring str)
+{
+    size_t i = 0;
+    while (i < str.size()) {
+        auto sub = str.substr(i, 1);
+        if (sub == L"\"") {
+            if ((i > 0 && str.substr(i - 1, 1) != L"\\")
+                || i == 0)
+            {
+                str.replace(i, 1, L"\\\"");
+                i++;
+            }
+        }
+        else if (sub == L"\\") {
+            if ((i < str.size() - 1 && str.substr(i + 1, 1) != L"\\")
+                || i == str.size() - 1)
+            {
+                str.replace(i, 1, L"\\\\");
+                i++;
+            }
+            else {
+                i += 2;
+            }
+        }
+        else if (sub == L"\n") {
+            if ((i > 0 && str.substr(i - 1, 1) != L"\\")
+                || i == 0)
+            {
+                str.replace(i, 1, L"\\n");
+                i++;
+            }
+        }
+        else if (sub == L"\r") {
+            if ((i > 0 && str.substr(i - 1, 1) != L"\\")
+                || i == 0)
+            {
+                str.replace(i, 1, L"\\r");
+                i++;
+            }
+        }
+        i++;
+    }
+
+    return str;
+}
