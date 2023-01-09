@@ -1697,8 +1697,8 @@ void LogFileMonitor::WriteToConsole( _In_ std::wstring Message, _In_ std::wstrin
             // escape backslashes in FileName
             auto fmtFileName = Utility::ReplaceAll(FileName, L"\\", L"\\\\");
             // sanitize msg
-            //std::wstring msg2 = Utility::JsonSanitize(msg);
-            auto log = Utility::FormatString(logFmt, msg.c_str(), fmtFileName.c_str());
+            std::wstring msg2 = Utility::SanitizeJson(msg);
+            auto log = Utility::FormatString(logFmt, msg2.c_str(), fmtFileName.c_str());
             logWriter.WriteConsoleLog(log);
         }
 

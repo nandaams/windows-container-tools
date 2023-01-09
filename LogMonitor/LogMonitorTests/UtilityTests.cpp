@@ -41,6 +41,7 @@ namespace UtilityTests
             str = L"456662.8989";
             Assert::IsTrue(Utility::isJsonNumber(str), L"should return true for 456662.8989");
         }
+
         TEST_METHOD(TestisJsonNumberFalse)
         {
             PWSTR str = L"false";
@@ -51,6 +52,30 @@ namespace UtilityTests
 
             str = L"1200.23x";
             Assert::IsFalse(Utility::isJsonNumber(str), L"should return false for 1200.23x");
+        }
+
+        TEST_METHOD(TestSanitizeJson)
+        {
+            std::wstring str = L"say, \"hello\"";
+            std::wstring expect = L"say, \\\"hello\\\"";
+            Assert::IsTrue(Utility::SanitizeJson(str) == expect, L"should escape \"");
+            str = L"\"hello\"";
+            expect = L"\\\"hello\\\"";
+            Assert::IsTrue(Utility::SanitizeJson(str) == expect, L"should escape \"");
+
+            str = L"hello\r\nworld";
+            expect = L"hello\\r\\nworld";
+            Assert::IsTrue(Utility::SanitizeJson(str) == expect, L"should escape \r and \n");
+            str = L"\r\nHello\r\n";
+            expect = L"\\r\\nHello\\r\\n";
+            Assert::IsTrue(Utility::SanitizeJson(str) == expect, L"should escape \r and \n");
+
+            str = L"\\Driver\\XX\\";
+            expect = L"\\\\Driver\\\\XX\\\\";
+            Assert::IsTrue(Utility::SanitizeJson(str) == expect, L"should escape \\");
+            str = L"C:\\Drive\\XX";
+            expect = L"C:\\\\Drive\\\\XX";
+            Assert::IsTrue(Utility::SanitizeJson(str) == expect, L"should escape \\");
         }
     };
 }

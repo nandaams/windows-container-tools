@@ -259,26 +259,28 @@ bool Utility::isJsonNumber(_In_ PWSTR str)
 
 ///
 /// helper function to "sanitize" a string to be valid JSON
-/// i.e. escale \", \n and \\ within a string
+/// i.e. escape ", \r, \n and \ within a string
+/// to \", \\r, \\n and \\ respectively
 ///
-static std::wstring JsonSanitize(_In_ std::wstring str)
+std::wstring Utility::SanitizeJson(_In_ std::wstring str)
 {
+    std::wstring cleanStr(str);
     size_t i = 0;
-    while (i < str.size()) {
-        auto sub = str.substr(i, 1);
+    while (i < cleanStr.size()) {
+        auto sub = cleanStr.substr(i, 1);
         if (sub == L"\"") {
-            if ((i > 0 && str.substr(i - 1, 1) != L"\\")
+            if ((i > 0 && cleanStr.substr(i - 1, 1) != L"\\")
                 || i == 0)
             {
-                str.replace(i, 1, L"\\\"");
+                cleanStr.replace(i, 1, L"\\\"");
                 i++;
             }
         }
         else if (sub == L"\\") {
-            if ((i < str.size() - 1 && str.substr(i + 1, 1) != L"\\")
-                || i == str.size() - 1)
+            if ((i < cleanStr.size() - 1 && cleanStr.substr(i + 1, 1) != L"\\")
+                || i == cleanStr.size() - 1)
             {
-                str.replace(i, 1, L"\\\\");
+                cleanStr.replace(i, 1, L"\\\\");
                 i++;
             }
             else {
@@ -286,23 +288,23 @@ static std::wstring JsonSanitize(_In_ std::wstring str)
             }
         }
         else if (sub == L"\n") {
-            if ((i > 0 && str.substr(i - 1, 1) != L"\\")
+            if ((i > 0 && cleanStr.substr(i - 1, 1) != L"\\")
                 || i == 0)
             {
-                str.replace(i, 1, L"\\n");
+                cleanStr.replace(i, 1, L"\\n");
                 i++;
             }
         }
         else if (sub == L"\r") {
-            if ((i > 0 && str.substr(i - 1, 1) != L"\\")
+            if ((i > 0 && cleanStr.substr(i - 1, 1) != L"\\")
                 || i == 0)
             {
-                str.replace(i, 1, L"\\r");
+                cleanStr.replace(i, 1, L"\\r");
                 i++;
             }
         }
         i++;
     }
 
-    return str;
+    return cleanStr;
 }
