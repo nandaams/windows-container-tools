@@ -58,24 +58,30 @@ namespace UtilityTests
         {
             std::wstring str = L"say, \"hello\"";
             std::wstring expect = L"say, \\\"hello\\\"";
-            Assert::IsTrue(Utility::SanitizeJson(str) == expect, L"should escape \"");
+            Utility::SanitizeJson(str);
+            Assert::IsTrue(str == expect, L"should escape \"");
             str = L"\"hello\"";
             expect = L"\\\"hello\\\"";
-            Assert::IsTrue(Utility::SanitizeJson(str) == expect, L"should escape \"");
+            Utility::SanitizeJson(str);
+            Assert::IsTrue(str == expect, L"should escape \"");
 
             str = L"hello\r\nworld";
             expect = L"hello\\r\\nworld";
-            Assert::IsTrue(Utility::SanitizeJson(str) == expect, L"should escape \r and \n");
+            Utility::SanitizeJson(str);
+            Assert::IsTrue(str == expect, L"should escape \r and \n");
             str = L"\r\nHello\r\n";
             expect = L"\\r\\nHello\\r\\n";
-            Assert::IsTrue(Utility::SanitizeJson(str) == expect, L"should escape \r and \n");
+            Utility::SanitizeJson(str);
+            Assert::IsTrue(str == expect, L"should escape \r and \n");
 
             str = L"\\Driver\\XX\\";
             expect = L"\\\\Driver\\\\XX\\\\";
-            Assert::IsTrue(Utility::SanitizeJson(str) == expect, L"should escape \\");
+            Utility::SanitizeJson(str);
+            Assert::IsTrue(str == expect, L"should escape \\");
             str = L"C:\\Drive\\XX";
             expect = L"C:\\\\Drive\\\\XX";
-            Assert::IsTrue(Utility::SanitizeJson(str) == expect, L"should escape \\");
+            Utility::SanitizeJson(str);
+            Assert::IsTrue(str == expect, L"should escape \\");
         }
     };
 }
