@@ -42,12 +42,16 @@ using namespace std;
 LogFileMonitor::LogFileMonitor(_In_ const std::wstring& LogDirectory,
                                _In_ const std::wstring& Filter,
                                _In_ bool IncludeSubfolders,
-                               _In_ const std::double_t& WaitInSeconds
+                               _In_ const std::double_t& WaitInSeconds,
+                               _In_ std::wstring LogFormat,
+                               _In_ std::wstring CustomLogFormat = L""
                                ) :
                                m_logDirectory(LogDirectory),
                                m_filter(Filter),
                                m_includeSubfolders(IncludeSubfolders),
-                               m_waitInSeconds(WaitInSeconds)
+                               m_waitInSeconds(WaitInSeconds),
+                               m_logFormat(LogFormat),
+                               m_customLogFormat(CustomLogFormat)
 {
     m_stopEvent = NULL;
     m_overlappedEvent = NULL;
@@ -62,7 +66,7 @@ LogFileMonitor::LogFileMonitor(_In_ const std::wstring& LogDirectory,
     // By default, the name is limited to MAX_PATH characters. To extend this limit to 32,767 wide characters,
     // we prepend "\?" to the path. Prepending the string "\?" does not allow access to the root directory
     // We, therefore, do not prepend for the root directory
-    bool isRootFolder = CheckIsRootFolder(m_logDirectory);
+    bool isRootFolder = FileMonitorUtilities::CheckIsRootFolder(m_logDirectory);
     m_logDirectory = isRootFolder ? m_logDirectory : PREFIX_EXTENDED_PATH + m_logDirectory;
 
     if (m_filter.empty())
@@ -215,7 +219,8 @@ LogFileMonitor::StartLogFileMonitorStatic(
         {
             logWriter.TraceError(
                 Utility::FormatString(
-                    L"Failed to start log file monitor. Log files in a directory %s will not be monitored. Error: %lu",
+                    L"Failed to start log file monitor. Log files in a directory "
+                    "'%s' will not be monitored. Error: %lu",
                     pThis->m_logDirectory.c_str(),
                     status
                 ).c_str()
@@ -227,7 +232,8 @@ LogFileMonitor::StartLogFileMonitorStatic(
     {
         logWriter.TraceError(
             Utility::FormatString(
-                L"Failed to start log file monitor. Log files in a directory %s will not be monitored. %S",
+                L"Failed to start log file monitor. Log files in a directory "
+                "'%s' will not be monitored. %S",
                 pThis->m_logDirectory.c_str(),
                 ex.what()
             ).c_str()
@@ -238,7 +244,7 @@ LogFileMonitor::StartLogFileMonitorStatic(
     {
         logWriter.TraceError(
             Utility::FormatString(
-                L"Failed to start log file monitor. Log files in a directory %s will not be monitored.",
+                L"Failed to start log file monitor. Log files in a directory '%s' will not be monitored.",
                 pThis->m_logDirectory.c_str()
             ).c_str()
         );
@@ -1678,10 +1684,19 @@ LogFileMonitor::ReadLogFile(
 }
 
 void LogFileMonitor::WriteToConsole( _In_ std::wstring Message, _In_ std::wstring FileName) {
-    auto logFmt = L"{\"Source\":\"File\",\"LogEntry\":{\"Logline\":\"%s\",\"FileName\":\"%s\"},\"SchemaVersion\":\"1.0.0\"}";
     size_t start = 0;
     size_t i = 0;
     wstring msg;
+
+    // struct to hold the File log entry and later format print
+    FileLogEntry logEntry;
+    FileLogEntry* pLogEntry = &logEntry;
+
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+
+    pLogEntry->source = L"File";
+    pLogEntry->currentTime = Utility::SystemTimeToString(st).c_str();
 
     while (true) {
         i = Message.find(L"\n", start);
@@ -1694,7 +1709,7 @@ void LogFileMonitor::WriteToConsole( _In_ std::wstring Message, _In_ std::wstrin
             msg = Message.substr(start, i - start);
             start = i + 1;
             // remove \r if any, usually before \n
-            if (msg.substr(msg.size() - 1) == L"\r") {
+            if (msg.size() > 0 && msg.substr(msg.size() - 1) == L"\r") {
                 msg.replace(msg.size() - 1, 1, L"");
             }
         }
@@ -1702,12 +1717,43 @@ void LogFileMonitor::WriteToConsole( _In_ std::wstring Message, _In_ std::wstrin
         if (msg.size() > 0) {
             // escape backslashes in FileName
             auto fmtFileName = Utility::ReplaceAll(FileName, L"\\", L"\\\\");
-            // sanitize msg
-            Utility::SanitizeJson(msg);
-            auto log = Utility::FormatString(logFmt, msg.c_str(), fmtFileName.c_str());
-            logWriter.WriteConsoleLog(log);
-        }
+            pLogEntry->fileName = fmtFileName;
+            pLogEntry->message = msg;
 
+            std::wstring formattedFileEntry;
+            if (Utility::CompareWStrings(m_logFormat, L"Custom")) {
+                formattedFileEntry = Utility::FormatEventLineLog(m_customLogFormat, pLogEntry, pLogEntry->source);
+            } else {
+                std::wstring logFmt;
+                if (Utility::CompareWStrings(m_logFormat, L"XML")) {
+                    logFmt = L"<Log><Source>File</Source>"
+                             L"<LogEntry>"
+                             L"<Logline>%s</Logline>"
+                             L"<FileName>%s</FileName>"
+                             L"</LogEntry>"
+                             L"</Log>";
+                } else {
+                    logFmt = L"{\"Source\": \"File\","
+                             L"\"LogEntry\": {"
+                             L"\"Logline\": \"%s\","
+                             L"\"FileName\": \"%s\""
+                             L"},"
+                             L"\"SchemaVersion\":\"1.0.0\""
+                             L"}";
+                    // sanitize message
+                    Utility::SanitizeJson(msg);
+                    pLogEntry->message = msg;
+                }
+
+                formattedFileEntry = Utility::FormatString(
+                    logFmt.c_str(),
+                    pLogEntry->message.c_str(),
+                    pLogEntry->fileName.c_str()
+                );
+            }
+
+            logWriter.WriteConsoleLog(formattedFileEntry);
+        }
         if (i >= Message.size()) break;
     }
 }
@@ -2044,11 +2090,15 @@ LogFileMonitor::GetFileId(
     return status;
 }
 
-bool
-LogFileMonitor::CheckIsRootFolder(_In_ std::wstring dirPath)
+std::wstring LogFileMonitor::FileFieldsMapping(_In_ std::wstring fileFields, _In_ void* pLogEntryData)
 {
-    std::wregex pattern(L"^\\w:?$");
+    std::wostringstream oss;
+    FileLogEntry* pLogEntry = (FileLogEntry*)pLogEntryData;
 
-    std::wsmatch matches;
-    return std::regex_search(dirPath, matches, pattern);
+    if (Utility::CompareWStrings(fileFields, L"TimeStamp")) oss << pLogEntry->currentTime;
+    if (Utility::CompareWStrings(fileFields, L"FileName")) oss << pLogEntry->fileName;
+    if (Utility::CompareWStrings(fileFields, L"Source")) oss << pLogEntry->source;
+    if (Utility::CompareWStrings(fileFields, L"Message")) oss << pLogEntry->message;
+
+    return oss.str();
 }

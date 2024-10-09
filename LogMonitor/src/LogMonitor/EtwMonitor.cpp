@@ -30,9 +30,11 @@ static const std::wstring g_sessionName = L"Log Monitor ETW Session";
 
 EtwMonitor::EtwMonitor(
     _In_ const std::vector<ETWProvider>& Providers,
-    _In_ bool EventFormatMultiLine
+    _In_ std::wstring LogFormat,
+    _In_ std::wstring CustomLogFormat = L""
     ) :
-    m_eventFormatMultiLine(EventFormatMultiLine)
+    m_logFormat(LogFormat),
+    m_customLogFormat(CustomLogFormat)
 {
     //
     // This is set as 'true' to stop processing events.
@@ -656,11 +658,10 @@ EtwMonitor::OnRecordEvent(
             try
             {
                 eventBuffer.resize(bufferSize);
-                pInfo = (TRACE_EVENT_INFO*)&eventBuffer.at(0);
+                pInfo = reinterpret_cast<TRACE_EVENT_INFO*>(&eventBuffer.at(0));
                 status = ERROR_SUCCESS;
             }
-            catch (std::bad_alloc)
-            {
+            catch (std::bad_alloc& e) {
                 logWriter.TraceError(
                     Utility::FormatString(L"Failed to allocate memory for event info (size=%lu).", bufferSize).c_str()
                 );
@@ -693,7 +694,7 @@ EtwMonitor::OnRecordEvent(
 
             logWriter.TraceError(
                 Utility::FormatString(L"Failed to query ETW event information for ProviderGUID: %s Error: %lu",
-                guidString, status).c_str());
+                guidString.c_str(), status).c_str());
         }
 
 
@@ -721,11 +722,12 @@ EtwMonitor::OnRecordEvent(
 ///
 /// Format ETW eventlog into a JSON output
 ///
-std::wstring etwJsonFormat(EtwLogEntry* pLogEntry)
+std::wstring EtwJsonFormat(EtwLogEntry* pLogEntry)
 {
     std::wostringstream oss;
+
     // construct the JSON output
-    oss << L"{\"Source\":\"ETW\",\"LogEntry\":{";
+    oss << L"{\"Source\":\"" << pLogEntry->source << L"\",\"LogEntry\":{";
     oss << L"\"Time\":\"" << pLogEntry->Time << L"\",";
     oss << L"\"ProviderName\":\"" << pLogEntry->ProviderName << L"\",";
     oss << L"\"ProviderId\":\"" << pLogEntry->ProviderId << "\",";
@@ -737,8 +739,8 @@ std::wstring etwJsonFormat(EtwLogEntry* pLogEntry)
     oss << L"\"Level\":\"" << pLogEntry->Level << L"\",";
     oss << L"\"Keyword\":\"" << pLogEntry->Keyword << L"\",";
     oss << L"\"EventId\":\"" << pLogEntry->EventId << "\",";
-
     oss << L"\"EventData\":{";
+
     bool firstEntry = true;
     for (auto evtData : pLogEntry->EventData) {
         oss << (firstEntry ? "" : ",");
@@ -748,39 +750,52 @@ std::wstring etwJsonFormat(EtwLogEntry* pLogEntry)
         Utility::SanitizeJson(key);
         oss << "\"" << key << "\":";
 
-        //
-        // format (JSON) numbers without quotation marks, e.g.
-        /*
-        "EventData": {
-                "FrameUniqueID": 403787,
-                "PortNumber" : 0,
-                "TID" : 0,
-                "PeerID" : 0,
-                "PayloadLength" : 68,
-                "QueueLength" : 0,
-                "QueueState" : "false",
-                "CustomData1" : 24,
-                "CustomData2" : 0,
-                "CustomData3" : 0
-        }
-        */
-        //
         if (Utility::isJsonNumber(evtData.second)) {
             oss << evtData.second;
-        }
-        else {
+        } else {
             wstring value = evtData.second;
             Utility::SanitizeJson(value);
             oss << L"\"" << value << L"\"";
         }
     }
-    oss << L"}";
 
+    oss << L"}";
     oss << L"},\"SchemaVersion\":\"1.0.0\"}";
 
     return oss.str();
 }
 
+///
+/// Format ETW eventlog into a XML output
+///
+std::wstring EtwXMLFormat(EtwLogEntry* pLogEntry)
+{
+    std::wostringstream oss;
+
+    // construct the XML output
+    oss << L"<Log><Source>ETW</Source><LogEntry>";
+    oss << L"<Time>" << pLogEntry->Time << L"</Time>";
+    oss << L"<ProviderName>" << pLogEntry->ProviderName << L"</ProviderName>";
+    oss << L"<ProviderId>" << pLogEntry->ProviderId << "</ProviderId>";
+    oss << L"<DecodingSource>" << pLogEntry->DecodingSource << L"</DecodingSource>";
+    oss << L"<Execution>";
+    oss << L"<ProcessId>" << pLogEntry->ExecProcessId << L"</ProcessId>";
+    oss << L"<ThreadId>" << pLogEntry->ExecThreadId << L"</ThreadId>";
+    oss << "</Execution>";
+    oss << L"<Level>" << pLogEntry->Level << L"</Level>";
+    oss << L"<Keyword>" << pLogEntry->Keyword << L"</Keyword>";
+    oss << L"<EventId>" << pLogEntry->EventId << L"</EventId>";
+
+    oss << L"<EventData>";
+    for (auto evtData : pLogEntry->EventData) {
+        wstring key = evtData.first;
+        wstring value = evtData.second;
+        oss << "<" << key << ">" << value <<"</" << key << ">";
+    }
+    oss << L"</EventData></LogEntry></Log>";
+
+    return oss.str();
+}
 
 ///
 /// Prints the data and metadata of the event.
@@ -826,7 +841,15 @@ EtwMonitor::PrintEvent(
             return status;
         }
 
-        std::wstring formattedEvent = etwJsonFormat(pLogEntry);
+        std::wstring formattedEvent;
+        if (Utility::CompareWStrings(m_logFormat, L"XML")) {
+            formattedEvent = EtwXMLFormat(pLogEntry);
+        } else if (Utility::CompareWStrings(m_logFormat, L"Custom")) {
+            formattedEvent = Utility::FormatEventLineLog(m_customLogFormat, pLogEntry, pLogEntry->source);
+        } else {
+            formattedEvent = EtwJsonFormat(pLogEntry);
+        }
+
         logWriter.WriteConsoleLog(formattedEvent);
     }
     catch(std::bad_alloc&)
@@ -860,6 +883,7 @@ EtwMonitor::FormatMetadata(
     fileTime.dwHighDateTime = EventRecord->EventHeader.TimeStamp.HighPart;
     fileTime.dwLowDateTime = EventRecord->EventHeader.TimeStamp.LowPart;
 
+    pLogEntry->source = L"ETW";
     pLogEntry->Time = Utility::FileTimeToString(fileTime).c_str();
 
     //
@@ -995,9 +1019,9 @@ EtwMonitor::FormatData(
         PBYTE pUserData = (PBYTE)EventRecord->UserData;
         PBYTE pEndOfUserData = (PBYTE)EventRecord->UserData + EventRecord->UserDataLength;
 
-        for (USHORT i = 0; i < EventInfo->TopLevelPropertyCount; i++)
+        for (ULONG i = 0; i < static_cast<ULONG>(EventInfo->TopLevelPropertyCount); i++)
         {
-            status = _FormatData(EventRecord, EventInfo, i, pUserData, pEndOfUserData, pLogEntry);
+            status = _FormatData(EventRecord, EventInfo, static_cast<USHORT>(i), pUserData, pEndOfUserData, pLogEntry);
             if (ERROR_SUCCESS != status)
             {
                 logWriter.TraceError(L"Failed to format ETW event user data..");
@@ -1071,9 +1095,11 @@ EtwMonitor::_FormatData(
             lastMember = EventInfo->EventPropertyInfoArray[Index].structType.StructStartIndex +
                 EventInfo->EventPropertyInfoArray[Index].structType.NumOfStructMembers;
 
-            for (USHORT j = EventInfo->EventPropertyInfoArray[Index].structType.StructStartIndex; j < lastMember; j++)
-            {
-                status = _FormatData(EventRecord, EventInfo, j, UserData, EndOfUserData, pLogEntry);
+            for (ULONG j = static_cast<ULONG>(EventInfo->EventPropertyInfoArray[Index].structType.StructStartIndex);
+                 j < static_cast<ULONG>(lastMember);
+                 j++) {
+                status = _FormatData(EventRecord, EventInfo, static_cast<USHORT>(j),
+                                     UserData, EndOfUserData, pLogEntry);
                 if (ERROR_SUCCESS != status || UserData == NULL)
                 {
                     logWriter.TraceError(L"Failed to format ETW event user data.");
@@ -1081,7 +1107,7 @@ EtwMonitor::_FormatData(
                 }
             }
         }
-        else if(propertyLength > 0 || (EndOfUserData - UserData) > 0)
+        else if (propertyLength > 0 || (EndOfUserData - UserData) > 0)
         {
             PEVENT_MAP_INFO pMapInfo = NULL;
 
@@ -1248,7 +1274,8 @@ EtwMonitor::GetPropertyLength(
             // EVENT_PROPERTY_INFO.length field will be zero.
             //
             if (TDH_INTYPE_BINARY == EventInfo->EventPropertyInfoArray[Index].nonStructType.InType &&
-                TDH_OUTTYPE_IPV6 == EventInfo->EventPropertyInfoArray[Index].nonStructType.OutType)
+                TDH_OUTTYPE_IPV6 == EventInfo->EventPropertyInfoArray[Index].nonStructType.OutType &&
+                EventInfo->EventPropertyInfoArray[Index].length == 0)
             {
                 PropertyLength = (USHORT)sizeof(IN6_ADDR);
             }
@@ -1257,6 +1284,39 @@ EtwMonitor::GetPropertyLength(
                 (EventInfo->EventPropertyInfoArray[Index].Flags & PropertyStruct) == PropertyStruct)
             {
                 PropertyLength = EventInfo->EventPropertyInfoArray[Index].length;
+            }
+            else if (0 == (EventInfo->EventPropertyInfoArray[Index].Flags & (PropertyStruct | PropertyParamCount)) &&
+                EventInfo->EventPropertyInfoArray[Index].count == 1 )
+            {
+                BYTE const* pbData = static_cast<BYTE const*>(EventRecord->UserData);
+                BYTE const* pbDataEnd = pbData + EventRecord->UserDataLength;
+
+                switch (EventInfo->EventPropertyInfoArray[Index].nonStructType.InType)
+                {
+                    case TDH_INTYPE_INT8:
+                    case TDH_INTYPE_UINT8:
+                    if ((pbDataEnd - pbData) >= 1)
+                    {
+                        PropertyLength = *pbData;
+                    }
+                    break;
+                    case TDH_INTYPE_INT16:
+                    case TDH_INTYPE_UINT16:
+                    if ((pbDataEnd - pbData) >= 2)
+                    {
+                        PropertyLength = *reinterpret_cast<UINT16 const UNALIGNED*>(pbData);
+                    }
+                    break;
+                    case TDH_INTYPE_INT32:
+                    case TDH_INTYPE_UINT32:
+                    case TDH_INTYPE_HEXINT32:
+                    if ((pbDataEnd - pbData) >= 4)
+                    {
+                        auto val = *reinterpret_cast<UINT32 const UNALIGNED*>(pbData);
+                        PropertyLength = static_cast<USHORT>(val > 0xffffu ? 0xffffu : val);
+                    }
+                    break;
+                }
             }
             else
             {
@@ -1408,4 +1468,30 @@ EtwMonitor::RemoveTrailingSpace(
         byteLength = (wcslen((LPWSTR)((PBYTE)MapName + MapName->MapEntryArray[i].OutputOffset)) - 1) * 2;
         *((LPWSTR)((PBYTE)MapName + (MapName->MapEntryArray[i].OutputOffset + byteLength))) = L'\0';
     }
+}
+
+std::wstring EtwMonitor::EtwFieldsMapping(_In_ std::wstring etwFields, _In_ void* pLogEntryData)
+{
+    std::wostringstream oss;
+    EtwLogEntry* pLogEntry = (EtwLogEntry*)pLogEntryData;
+
+    if (Utility::CompareWStrings(etwFields, L"TimeStamp")) oss << pLogEntry->Time;
+    if (Utility::CompareWStrings(etwFields, L"Severity")) oss << pLogEntry->Level;
+    if (Utility::CompareWStrings(etwFields, L"Source")) oss << pLogEntry->source;
+    if (Utility::CompareWStrings(etwFields, L"ProviderId")) oss << pLogEntry->ProviderId;
+    if (Utility::CompareWStrings(etwFields, L"ProviderName")) oss << pLogEntry->ProviderName;
+    if (Utility::CompareWStrings(etwFields, L"DecodingSource")) oss << pLogEntry->DecodingSource;
+    if (Utility::CompareWStrings(etwFields, L"ExecutionProcessId")) oss << pLogEntry->ExecProcessId;
+    if (Utility::CompareWStrings(etwFields, L"ExecutionThreadId")) oss << pLogEntry->ExecThreadId;
+    if (Utility::CompareWStrings(etwFields, L"Keyword")) oss << pLogEntry->Keyword;
+    if (Utility::CompareWStrings(etwFields, L"EventId")) oss << pLogEntry->EventId;
+    if (Utility::CompareWStrings(etwFields, L"EventData")) {
+        for (auto evtData : pLogEntry->EventData) {
+            wstring key = evtData.first;
+            wstring value = evtData.second;
+            oss << key << ": " << value << " ";
+        }
+    }
+
+    return oss.str();
 }
